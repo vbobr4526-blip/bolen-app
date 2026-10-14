@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Болен</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Russo+One&family=Manrope:wght@400;600;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+:root {
+  --bg: #0b0d0a; --panel: #13170f; --line: #262d1d; --fg: #eef2e6; --muted: #9aa58a;
+  --neon: #b6ff2e; --gold: #ffd21f;
+  --display: "Russo One", "Arial Black", Impact, sans-serif;
+  --body: "Manrope", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--body); }
+body { padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }
+.page { padding: 18px 16px 24px; display: grid; gap: 22px; max-width: 560px; margin: 0 auto; }
+.page[hidden] { display: none; }
+.hazard { height: 8px; background: repeating-linear-gradient(-45deg, var(--gold) 0 12px, #111 12px 24px); border-radius: 2px; }
+.label { font: 500 11px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+h1, h2 { font-family: var(--display); font-weight: 400; margin: 0; text-transform: uppercase; line-height: 1; }
+h1 { font-size: 64px; color: var(--neon); text-shadow: 0 0 22px rgba(182,255,46,.45); }
+h2 { font-size: 24px; }
+h2 em { font-style: normal; color: var(--gold); }
+p { margin: 0; }
+.lead { color: var(--muted); }
+.lead b { color: var(--fg); }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.stat { padding: 14px 10px; display: grid; gap: 4px; text-align: center; }
+.stat + .stat { border-left: 1px solid var(--line); }
+.stat b { font: 400 24px var(--display); color: var(--neon); font-variant-numeric: tabular-nums; }
+.stat span { font-size: 12px; color: var(--muted); line-height: 1.25; }
+ul.list { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+ul.list li { padding-left: 20px; position: relative; }
+ul.list li::before { content: ""; position: absolute; left: 0; top: .55em; width: 9px; height: 9px; background: var(--neon); clip-path: polygon(0 0,100% 50%,0 100%); }
+.card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 14px; display: grid; gap: 6px; }
+.offer { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+.offer h3 { margin: 0; font-size: 16px; font-weight: 800; }
+.offer small { display: block; color: var(--muted); font-size: 13px; margin-top: 2px; }
+.cost { font: 700 16px var(--mono); color: var(--gold); white-space: nowrap; }
+.card.best { border-color: var(--neon); }
+.badge { display: inline-block; font: 700 10px var(--mono); padding: 2px 6px; border-radius: 3px; background: var(--neon); color: #0b0d0a; margin-left: 6px; vertical-align: middle; }
+.order { justify-self: start; margin-top: 6px; }
+button { font: 800 14px var(--body); border: 0; border-radius: 6px; padding: 10px 14px; cursor: pointer; background: var(--neon); color: #0b0d0a; }
+button.ghost { background: transparent; color: var(--neon); border: 1px solid var(--neon); }
+button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.cta { width: 100%; padding: 14px; font-size: 16px; }
+details { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+summary { list-style: none; cursor: pointer; padding: 14px 40px 14px 14px; font-weight: 800; position: relative; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; position: absolute; right: 14px; top: 11px; font: 700 20px var(--mono); color: var(--neon); }
+details[open] summary::after { content: "–"; }
+details p { padding: 0 14px 14px; color: var(--muted); }
+.links { display: grid; gap: 8px; }
+.links button { text-align: left; }
+.tabs { position: fixed; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(4, 1fr); background: rgba(11,13,10,.96); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom, 0px); backdrop-filter: blur(8px); }
+.tab { background: none; color: var(--muted); border-radius: 0; padding: 10px 4px 12px; display: grid; gap: 2px; justify-items: center; font: 600 11px var(--body); }
+.tab i { font-style: normal; font-size: 20px; line-height: 1; }
+.tab[aria-selected="true"] { color: var(--neon); }
+</style>
+</head>
+<body>
+
+<main class="page" id="home">
+  <div class="hazard" aria-hidden="true"></div>
+  <div class="label">TikTok · Arena Breakout</div>
+  <h1>Болен</h1>
+  <p class="lead"><b>@bolen_live</b> — новости, утечки и скины Arena Breakout. В основном мобильная версия, иногда Infinity. Мой голос и маскот Талия в каждом ролике.</p>
+  <div class="stats">
+    <div class="stat"><b>4.2K</b><span>подписчиков</span></div>
+    <div class="stat"><b>159K</b><span>лайков</span></div>
+    <div class="stat"><b>30–100K</b><span>просмотров на топе</span></div>
+  </div>
+  <section class="card">
+    <h2>Что <em>заходит</em></h2>
+    <ul class="list">
+      <li>Новые ножи и предметы сезона</li>
+      <li>Инвентарь и сравнения сезонов</li>
+      <li>Возвращение старых карт: порт, шахта, armory</li>
+      <li>Утечки и анонсы обновлений</li>
+    </ul>
+  </section>
+  <button class="cta" data-go="price">Смотреть цены на рекламу</button>
+</main>
+
+<main class="page" id="price" hidden>
+  <h2>Реклама <em>и цены</em></h2>
+  <div class="card"><div class="offer"><div><h3>Упоминание</h3><small>5–10 секунд в ролике, ссылка в описании</small></div><span class="cost">1 000 ₽</span></div><button class="order ghost" data-order="Упоминание — 1 000 ₽">Заказать</button></div>
+  <div class="card"><div class="offer"><div><h3>Нативная интеграция</h3><small>20–30 секунд внутри ролика, в стиле канала</small></div><span class="cost">2 500 ₽</span></div><button class="order ghost" data-order="Интеграция — 2 500 ₽">Заказать</button></div>
+  <div class="card"><div class="offer"><div><h3>Отдельный ролик</h3><small>Целиком о продукте, озвучка и монтаж мои</small></div><span class="cost">4 500 ₽</span></div><button class="order ghost" data-order="Отдельный ролик — 4 500 ₽">Заказать</button></div>
+  <div class="card"><div class="offer"><div><h3>Пост в Telegram</h3><small>Текст, картинка и ссылка в @bolen_channal</small></div><span class="cost">500 ₽</span></div><button class="order ghost" data-order="Пост в TG — 500 ₽">Заказать</button></div>
+  <div class="card best"><div class="offer"><div><h3>Пакет «Полный заход»<span class="badge">ВЫГОДНО</span></h3><small>Ролик, пост в Telegram и ссылка в био на 3 дня</small></div><span class="cost">5 000 ₽</span></div><button class="order" data-order="Пакет — 5 000 ₽">Заказать</button></div>
+  <ul class="list">
+    <li>Сценарий согласуем до публикации, одна правка бесплатно</li>
+    <li>Предоплата 50%, остаток после выхода ролика</li>
+    <li>Ролик остаётся в профиле</li>
+    <li>Розыгрыши и долгое сотрудничество — обсуждаем</li>
+  </ul>
+</main>
+
+<main class="page" id="faq" hidden>
+  <h2>Вопросы <em>и ответы</em></h2>
+  <div id="faq-list" style="display:grid;gap:8px"></div>
+  <button class="cta ghost" id="ask">Задать свой вопрос</button>
+</main>
+
+<main class="page" id="links" hidden>
+  <h2>Связь</h2>
+  <div class="links">
+    <button data-link="https://t.me/Tt_bolen">✉️ Написать Болену — @Tt_bolen</button>
+    <button class="ghost" data-link="https://t.me/bolen_channal">📣 Telegram-канал @bolen_channal</button>
+    <button class="ghost" data-link="https://www.tiktok.com/@bolen_live">🎬 TikTok @bolen_live</button>
+  </div>
+  <div class="hazard" aria-hidden="true"></div>
+</main>
+
+<nav class="tabs" role="tablist">
+  <button class="tab" role="tab" data-tab="home" aria-selected="true"><i>🎮</i>Канал</button>
+  <button class="tab" role="tab" data-tab="price" aria-selected="false"><i>💰</i>Цены</button>
+  <button class="tab" role="tab" data-tab="faq" aria-selected="false"><i>❓</i>Вопросы</button>
+  <button class="tab" role="tab" data-tab="links" aria-selected="false"><i>🔗</i>Связь</button>
+</nav>
+
+<script>
+const BOT = "bolen_support_bot";
+const FAQ = [
+  ["О чём канал?", "Канал про Arena Breakout: в основном мобильная версия, иногда Infinity. Новости, утечки обновлений, сезоны, новые ножи и скины, розыгрыши."],
+  ["Сколько стоит реклама?", "Упоминание — 1 000 ₽, интеграция — 2 500 ₽, отдельный ролик — 4 500 ₽, пост в TG — 500 ₽, пакет — 5 000 ₽. Все форматы во вкладке «Цены»."],
+  ["Когда стрим?", "Анонсы стримов выходят в TikTok и в Telegram-канале @bolen_channal — подпишись, чтобы не пропустить."],
+  ["Как попасть в розыгрыш?", "Условия каждого розыгрыша — в ролике и в Telegram-канале @bolen_channal."]
+];
+const tg = window.Telegram && Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); try { tg.setHeaderColor("#0b0d0a"); tg.setBackgroundColor("#0b0d0a"); } catch (e) {} }
+
+function show(id) {
+  document.querySelectorAll(".page").forEach(p => p.hidden = p.id !== id);
+  document.querySelectorAll(".tab").forEach(t => t.setAttribute("aria-selected", t.dataset.tab === id));
+  window.scrollTo(0, 0);
+  if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+}
+function openLink(url) {
+  if (tg && url.startsWith("https://t.me/")) tg.openTelegramLink(url);
+  else if (tg) tg.openLink(url);
+  else window.open(url, "_blank");
+}
+document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => show(b.dataset.tab));
+document.querySelectorAll("[data-go]").forEach(b => b.onclick = () => show(b.dataset.go));
+document.querySelectorAll("[data-link]").forEach(b => b.onclick = () => openLink(b.dataset.link));
+document.querySelectorAll("[data-order]").forEach((b, i) => b.onclick = () => {
+  // Переходим в бота: он сам проведёт по заявке с выбранным форматом.
+  openLink(`https://t.me/${BOT}?start=ad_${i}`);
+  if (tg) tg.close();
+});
+document.getElementById("ask").onclick = () => { openLink(`https://t.me/${BOT}`); if (tg) tg.close(); };
+
+const list = document.getElementById("faq-list");
+FAQ.forEach(([q, a]) => {
+  const d = document.createElement("details");
+  const s = document.createElement("summary"); s.textContent = q;
+  const p = document.createElement("p"); p.textContent = a;
+  d.append(s, p); list.append(d);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "id": "bolen.screentime",
+  "name": "Screen time",
+  "name_ru": "Экранное время",
+  "version": "1.0",
+  "author": "bolen-app",
+  "description": "Counts how long you scroll TikTok today and reminds you to take a break.",
+  "description_ru": "Считает, сколько ты сегодня сидишь в TikTok, и напоминает сделать перерыв.",
+  "entry": "bolen.screentime.ScreenTime",
+  "min_api": 3
+}

@@ -65,6 +65,15 @@ public final class Analyst extends Plugin {
     private Video visible;
 
     private int feedLogs;
+    /** Диагностика: что плагин видел (окно «Диагностика» в настройках). */
+    private volatile int feedCalls, parsedOk, parsedFail;
+    private volatile String feedClass = "—";
+    private final Map<String, String> screenDiag = new LinkedHashMap<String, String>() {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
+            return size() > 3;
+        }
+    };
     private boolean loggedOwnSeen;
     private final Set<String> loggedScreens = new HashSet<>();
 
@@ -76,7 +85,7 @@ public final class Analyst extends Plugin {
             try {
                 FloatingButton b = buttons.get(a);
                 visible = findVisible(a, b == null ? null : b.view);
-                if (b != null) b.show(visible != null);
+                if (b != null) b.show(visible != null || host.prefs().getBoolean("always", false));
             } catch (Throwable t) {
                 host.log("tick: " + t);
             }
@@ -96,6 +105,24 @@ public final class Analyst extends Plugin {
                 askAccount();
             }
         });
+        host.call("addSettingsRow", "Диагностика", "Если кнопка не появляется — открой и пришли скриншот",
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        host.call("showWindow", "📊 Диагностика", diagnostics());
+                    }
+                });
+        host.call("addSettingsRow", "Кнопка всегда на экране",
+                "Для проверки: показывать 📊 везде. Нажми, чтобы переключить", new Runnable() {
+                    @Override
+                    public void run() {
+                        boolean on = !host.prefs().getBoolean("always", false);
+                        host.prefs().edit().putBoolean("always", on).apply();
+                        host.call("showWindow", "📊 Аналитик", on
+                                ? "Кнопка 📊 теперь видна всегда. Нажми её на своём ролике — увидишь, что плагин о нём знает."
+                                : "Кнопка 📊 снова появляется только на твоих роликах.");
+                    }
+                });
         host.call("addSettingsRow", "Как пользоваться", "Кнопка 📊 на твоих роликах", new Runnable() {
             @Override
             public void run() {
@@ -269,10 +296,29 @@ public final class Analyst extends Plugin {
                 if (!anyOwner || isOwn(v, ownerUid, ownerHandle)) candidates.add(v);
             }
         }
-        if (candidates.isEmpty()) return null;
-
         List<String> texts = new ArrayList<>();
         collectTexts(a.getWindow().getDecorView(), ignore, texts, new Rect());
+        Video found = match(texts, candidates);
+
+        StringBuilder d = new StringBuilder();
+        d.append("ролики-кандидаты: ").append(candidates.size())
+                .append(anyOwner ? " (твои)" : " (аккаунт не задан)")
+                .append(", тексты на экране: ").append(texts.size())
+                .append(", совпадение: ").append(found == null ? "нет" : found.aid);
+        for (int i = 0; i < Math.min(4, texts.size()); i++) {
+            String t = texts.get(i).replace('\n', ' ');
+            d.append("\n  «").append(t.length() > 40 ? t.substring(0, 40) + "…" : t).append('»');
+        }
+        synchronized (screenDiag) {
+            String name = a.getClass().getName();
+            screenDiag.remove(name);
+            screenDiag.put(name, d.toString());
+        }
+        return found;
+    }
+
+    private static Video match(List<String> texts, List<Video> candidates) {
+        if (candidates.isEmpty()) return null;
         for (String t : texts) {
             String norm = normalize(t);
             // описание может быть обрезано на экране («…», «ещё»)
@@ -302,16 +348,58 @@ public final class Analyst extends Plugin {
         return s.replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
     }
 
+    private String diagnostics() {
+        SharedPreferences prefs = host.prefs();
+        String ownerUid = prefs.getString("owner_uid", null), ownerHandle = prefs.getString("owner_handle", null);
+        int total, own = 0, withDesc = 0;
+        Video ownSample = null;
+        synchronized (this) {
+            total = videos.size();
+            for (Video v : videos.values()) {
+                if (v.descKey != null) withDesc++;
+                if (isOwn(v, ownerUid, ownerHandle)) {
+                    own++;
+                    ownSample = v;
+                }
+            }
+        }
+        StringBuilder s = new StringBuilder();
+        s.append("Аккаунт: ").append(ownerHandle == null ? "—" : "@" + ownerHandle)
+                .append(ownerUid == null ? "" : " (uid " + ownerUid + ")").append('\n');
+        s.append("onFeed вызван: ").append(feedCalls).append(" раз, класс ").append(feedClass).append('\n');
+        s.append("Прочитано роликов: ").append(parsedOk).append(", не прочитано: ").append(parsedFail).append('\n');
+        s.append("В памяти: ").append(total).append(", с описанием: ").append(withDesc)
+                .append(", твоих: ").append(own).append('\n');
+        if (ownSample != null) s.append("Пример твоего: ").append(ownSample).append('\n');
+        s.append("Экраны:\n").append(loggedScreens.isEmpty() ? "—" : loggedScreens.toString()).append('\n');
+        synchronized (screenDiag) {
+            for (Map.Entry<String, String> e : screenDiag.entrySet()) {
+                String n = e.getKey();
+                s.append("\n[").append(n.substring(n.lastIndexOf('.') + 1)).append("] ").append(e.getValue()).append('\n');
+            }
+        }
+        String text = s.toString();
+        host.log("diagnostics:\n" + text);
+        return text;
+    }
+
     // --- лента ---
 
     private void parseFeed(List<Object> posts) {
         try {
+            feedCalls++;
+            Object head = posts.get(0);
+            if (head != null) feedClass = head.getClass().getName();
             int parsed = 0;
             Video sample = null;
             for (Object post : posts) {
                 Video v = Video.read(post);
-                if (v == null) continue;
+                if (v == null) {
+                    parsedFail++;
+                    continue;
+                }
                 parsed++;
+                parsedOk++;
                 sample = v;
                 synchronized (this) {
                     videos.put(v.aid, v);
@@ -349,7 +437,7 @@ public final class Analyst extends Plugin {
 
     private void analyse(Video v) {
         if (v == null) {
-            host.call("showWindow", "📊 Аналитик", "Не вижу, какой ролик на экране. Открой свой ролик и нажми 📊.");
+            host.call("showWindow", "📊 Аналитик", "Не узнал ролик на экране.\n\nОткрой настройки мода → «📊 Аналитик» → «Диагностика» и пришли скриншот.");
             return;
         }
         synchronized (this) {

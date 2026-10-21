@@ -12,6 +12,8 @@ import com.ss.android.ugc.aweme.ttp.plugin.Plugin;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -238,9 +240,17 @@ public final class Analyst extends Plugin {
         StringBuilder d = new StringBuilder();
         d.append("тексты на экране: ").append(items.size())
                 .append(", твой ролик: ").append(found == null ? "нет" : found.toString());
+        // нижние тексты важнее: там «Просмотры: …», дата и описание
+        List<ScreenReader.Item> bottomFirst = new ArrayList<>(items);
+        Collections.sort(bottomFirst, new Comparator<ScreenReader.Item>() {
+            @Override
+            public int compare(ScreenReader.Item x, ScreenReader.Item y) {
+                return y.rect.top - x.rect.top;
+            }
+        });
         int shown = 0;
-        for (ScreenReader.Item it : items) {
-            if (shown++ >= 6) break;
+        for (ScreenReader.Item it : bottomFirst) {
+            if (shown++ >= 10) break;
             String t = it.text.replace('\n', ' ');
             d.append("\n  «").append(t.length() > 40 ? t.substring(0, 40) + "…" : t).append('»');
         }

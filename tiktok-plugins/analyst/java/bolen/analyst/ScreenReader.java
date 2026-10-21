@@ -33,7 +33,9 @@ final class ScreenReader {
 
     private static final Pattern VIEWS = Pattern.compile(
             "^(просмотры|просмотров|views|перегляди)\\s*:?\\s*(.+)$", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-    private static final Pattern COUNT = Pattern.compile(
+    private static final Pattern VIEWS_LABEL = Pattern.compile(
+            "^(просмотры|просмотров|views|перегляди)\\s*:?$", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    private static final Pattern COUNT =Pattern.compile(
             "^(\\d+(?:[.,]\\d+)?)\\s*(тыс|млн|млрд|k|m|b)?\\.?$", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     private static final Pattern AGE = Pattern.compile(
             "(\\d+)\\s*(мин|ч|д|дн|нед|min|m|h|d|w)\\.?\\s*(назад|ago)", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
@@ -65,6 +67,20 @@ final class ScreenReader {
                 if (n >= 0) {
                     viewsItem = it;
                     views = n;
+                    break;
+                }
+            }
+            if (VIEWS_LABEL.matcher(it.text).matches()) {
+                // «Просмотры:» и «462» — разные TextView: число справа в той же строке
+                Item best = null;
+                for (Item other : items) {
+                    if (other == it || other.rect.left < it.rect.left || count(other.text) < 0) continue;
+                    if (Math.abs(other.rect.centerY() - it.rect.centerY()) > it.rect.height()) continue;
+                    if (best == null || other.rect.left < best.rect.left) best = other;
+                }
+                if (best != null) {
+                    viewsItem = it;
+                    views = count(best.text);
                     break;
                 }
             }

@@ -17,7 +17,7 @@ import java.util.regex.Pattern;
  * Читает статистику ролика прямо с экрана. На СВОИХ роликах TikTok рисует строку
  * «Просмотры: 462» (и «Больше статистики»), на чужих её нет — по ней плагин понимает,
  * что ролик твой. Лайки, комментарии, сохранения и репосты — числа в правой колонке
- * сверху вниз, возраст — «4 ч. назад».
+ * сверху вниз, возраст — «4 ч. назад», автор — слева от возраста.
  */
 final class ScreenReader {
 
@@ -56,7 +56,10 @@ final class ScreenReader {
         }
     }
 
-    /** Ролик на экране, если он твой (есть строка «Просмотры: …»), иначе null. */
+    /**
+     * Ролик на экране или null. Свой ролик (own) — со строкой «Просмотры: …»; чужой узнаётся
+     * по «… назад» и колонке чисел справа, просмотров у него на экране нет (play = −1).
+     */
     static Analyst.Video read(List<Item> items, int screenWidth) {
         Item viewsItem = null;
         long views = -1;
@@ -85,26 +88,40 @@ final class ScreenReader {
                 }
             }
         }
-        if (viewsItem == null) return null;
 
-        Analyst.Video v = new Analyst.Video();
-        v.play = views;
-        v.fromScreen = true;
+        Item ageItem = null;
+        double ageHours = -1;
+        for (Item it : items) {
+            Matcher m = AGE.matcher(it.text);
+            if (m.find()) {
+                ageHours = hours(Long.parseLong(m.group(1)), m.group(2).toLowerCase(Locale.ROOT));
+                ageItem = it;
+                break;
+            }
+        }
+        if (viewsItem == null && ageItem == null) return null;
 
-        // правая колонка: лайки, комментарии, сохранения, репосты — сверху вниз, выше строки просмотров
+        // правая колонка: лайки, комментарии, сохранения, репосты — сверху вниз
+        int bound = viewsItem != null ? viewsItem.rect.top : ageItem.rect.bottom + ageItem.rect.height();
         List<Item> column = new ArrayList<>();
         for (Item it : items) {
-            if (it.rect.centerX() > screenWidth * 0.75 && it.rect.bottom <= viewsItem.rect.top
-                    && count(it.text) >= 0) {
+            if (it.rect.centerX() > screenWidth * 0.75 && it.rect.bottom <= bound && count(it.text) >= 0) {
                 column.add(it);
             }
         }
+        if (viewsItem == null && column.size() < 3) return null; // не экран ролика (профиль, поиск…)
         Collections.sort(column, new Comparator<Item>() {
             @Override
             public int compare(Item a, Item b) {
                 return a.rect.top - b.rect.top;
             }
         });
+
+        Analyst.Video v = new Analyst.Video();
+        v.fromScreen = true;
+        v.own = viewsItem != null;
+        v.play = views;
+        v.digg = v.comment = v.collect = v.share = -1;
         if (column.size() >= 4) {
             List<Item> last = column.subList(column.size() - 4, column.size());
             v.digg = count(last.get(0).text);
@@ -117,22 +134,26 @@ final class ScreenReader {
             v.share = count(column.get(2).text);
         }
 
-        // возраст и описание: описание — первый текст слева под строкой с «… назад»
-        Item ageItem = null;
-        for (Item it : items) {
-            Matcher m = AGE.matcher(it.text);
-            if (m.find()) {
-                double hours = hours(Long.parseLong(m.group(1)), m.group(2).toLowerCase(Locale.ROOT));
-                v.createTime = (long) (System.currentTimeMillis() / 1000.0 - hours * 3600);
-                v.ageApprox = true;
-                ageItem = it;
-                break;
-            }
-        }
         if (ageItem != null) {
+            v.createTime = (long) (System.currentTimeMillis() / 1000.0 - ageHours * 3600);
+            v.ageApprox = true;
+
+            // автор — текст слева от «… назад» в той же строке
+            Item author = null;
+            for (Item it : items) {
+                if (it != ageItem && it.rect.right <= ageItem.rect.left + 4 && count(it.text) < 0
+                        && Math.abs(it.rect.centerY() - ageItem.rect.centerY()) < ageItem.rect.height()
+                        && (author == null || it.rect.right > author.rect.right)) {
+                    author = it;
+                }
+            }
+            if (author != null) v.nickname = author.text;
+
+            // описание — первый текст слева под строкой с «… назад»
+            int descBottom = viewsItem != null ? viewsItem.rect.top + 4 : ageItem.rect.bottom + ageItem.rect.height() * 4;
             Item desc = null;
             for (Item it : items) {
-                if (it.rect.top >= ageItem.rect.bottom - 4 && it.rect.bottom <= viewsItem.rect.top + 4
+                if (it.rect.top >= ageItem.rect.bottom - 4 && it.rect.bottom <= descBottom
                         && it.rect.centerX() < screenWidth * 0.75 && count(it.text) < 0
                         && (desc == null || it.rect.top < desc.rect.top)) {
                     desc = it;

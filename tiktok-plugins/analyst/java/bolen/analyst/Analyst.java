@@ -80,7 +80,7 @@ public final class Analyst extends Plugin {
             try {
                 FloatingButton b = buttons.get(a);
                 visible = findVisible(a, b == null ? null : b.view);
-                if (b != null) b.show(visible != null || host.prefs().getBoolean("always", false));
+                if (b != null) b.show(shouldShow(visible));
             } catch (Throwable t) {
                 host.log("tick: " + t);
             }
@@ -92,17 +92,38 @@ public final class Analyst extends Plugin {
 
     @Override
     public void onStart(Context context) {
+        SharedPreferences prefs = host.prefs();
+        if (prefs.getBoolean("always", false)) {
+            prefs.edit().remove("always").putString(SettingsDialog.MODE, SettingsDialog.MODE_ALWAYS).apply();
+        }
         loadSamples();
         prune();
-        host.call("addSettingsRow", "Как пользоваться", "Кнопка 📊 на твоих роликах", new Runnable() {
+        host.call("addSettingsRow", "Настройки", "Где показывать кнопку, её вид и что в отчёте", new Runnable() {
+            @Override
+            public void run() {
+                Activity a = resumed.get();
+                if (a == null) return;
+                new SettingsDialog(a, host.prefs(), new Runnable() {
+                    @Override
+                    public void run() {
+                        applyButtonStyle();
+                    }
+                }).show();
+            }
+        });
+        host.call("addSettingsRow", "Как пользоваться", "Кнопка 📊 поверх роликов", new Runnable() {
             @Override
             public void run() {
                 host.call("showWindow", "📊 Аналитик",
-                        "Открой свой ролик (из профиля) — появится кнопка 📊. Нажми её: статистика "
-                                + "именно этого ролика, прогноз и что исправить в следующем.\n\n"
-                                + "Свой ролик плагин узнаёт по строке «Просмотры: …» внизу — "
-                                + "TikTok показывает её только автору. Настраивать ничего не нужно.\n\n"
-                                + "Кнопку можно перетащить пальцем в любое место, она запомнит его.\n\n"
+                        "Открой ролик — появится кнопка 📊. Нажми её: статистика именно этого ролика, "
+                                + "прогноз и советы.\n\n"
+                                + "Где появляется кнопка — в «Настройках»: только на твоих роликах "
+                                + "(по умолчанию), на всех роликах или всегда.\n\n"
+                                + "Свой ролик плагин узнаёт по строке «Просмотры: …» — её видит только автор. "
+                                + "У чужих роликов просмотров на экране нет: плагин ищет их в данных ленты, "
+                                + "а если не нашёл — считает реакцию по лайкам.\n\n"
+                                + "Кнопку можно перетащить пальцем в любое место. Размер и прозрачность — "
+                                + "в «Настройках».\n\n"
                                 + "Прогноз точнее, если открыть тот же ролик ещё раз через 20+ минут.");
             }
         });
@@ -113,28 +134,27 @@ public final class Analyst extends Plugin {
                         host.call("showWindow", "📊 Диагностика", diagnostics());
                     }
                 });
-        host.call("addSettingsRow", "Кнопка всегда на экране",
-                "Для проверки: показывать 📊 везде. Нажми, чтобы переключить", new Runnable() {
-                    @Override
-                    public void run() {
-                        boolean on = !host.prefs().getBoolean("always", false);
-                        host.prefs().edit().putBoolean("always", on).apply();
-                        host.call("showWindow", "📊 Аналитик", on
-                                ? "Кнопка 📊 теперь видна всегда."
-                                : "Кнопка 📊 снова появляется только на твоих роликах.");
-                    }
-                });
         host.call("addSettingsRow", "Сбросить статистику", "Забыть замеры и сравнение с лентой", new Runnable() {
             @Override
             public void run() {
                 SharedPreferences prefs = host.prefs();
-                float x = prefs.getFloat("btn_x", 0.04f), y = prefs.getFloat("btn_y", 0.3f);
-                prefs.edit().clear().putFloat("btn_x", x).putFloat("btn_y", y).apply();
+                Map<String, ?> keep = new LinkedHashMap<>(prefs.getAll());
+                SharedPreferences.Editor e = prefs.edit().clear();
+                for (Map.Entry<String, ?> entry : keep.entrySet()) {
+                    String k = entry.getKey();
+                    Object val = entry.getValue();
+                    if (k.startsWith("s_") || k.equals("scores") || k.equals("speeds")) continue;
+                    if (val instanceof Boolean) e.putBoolean(k, (Boolean) val);
+                    else if (val instanceof Float) e.putFloat(k, (Float) val);
+                    else if (val instanceof Integer) e.putInt(k, (Integer) val);
+                    else if (val instanceof String) e.putString(k, (String) val);
+                }
+                e.apply();
                 synchronized (Analyst.this) {
                     scoreSamples.clear();
                     speedSamples.clear();
                 }
-                host.call("showWindow", "📊 Аналитик", "Статистика сброшена. Место кнопки сохранено.");
+                host.call("showWindow", "📊 Аналитик", "Статистика сброшена. Настройки и место кнопки сохранены.");
             }
         });
         host.log("started");
@@ -151,8 +171,10 @@ public final class Analyst extends Plugin {
             resumed = new WeakReference<>(activity);
             if (!buttons.containsKey(activity)) {
                 SharedPreferences prefs = host.prefs();
-                buttons.put(activity, new FloatingButton(activity,
-                        prefs.getFloat("btn_x", 0.04f), prefs.getFloat("btn_y", 0.3f), buttonListener));
+                FloatingButton b = new FloatingButton(activity,
+                        prefs.getFloat("btn_x", 0.04f), prefs.getFloat("btn_y", 0.3f), buttonListener);
+                b.style(prefs.getInt(SettingsDialog.SIZE, 50), prefs.getFloat(SettingsDialog.ALPHA, 1f));
+                buttons.put(activity, b);
             }
             main.removeCallbacks(tick);
             main.post(tick);
@@ -192,6 +214,24 @@ public final class Analyst extends Plugin {
         return posts;
     }
 
+    private boolean shouldShow(Video v) {
+        String mode = host.prefs().getString(SettingsDialog.MODE, SettingsDialog.MODE_OWN);
+        if (SettingsDialog.MODE_ALWAYS.equals(mode)) return true;
+        if (SettingsDialog.MODE_ALL.equals(mode)) return v != null;
+        return v != null && v.own;
+    }
+
+    private void applyButtonStyle() {
+        SharedPreferences prefs = host.prefs();
+        int size = prefs.getInt(SettingsDialog.SIZE, 50);
+        float alpha = prefs.getFloat(SettingsDialog.ALPHA, 1f);
+        float x = prefs.getFloat("btn_x", 0.04f), y = prefs.getFloat("btn_y", 0.3f);
+        for (FloatingButton b : buttons.values()) {
+            b.style(size, alpha);
+            b.place(x, y);
+        }
+    }
+
     private final FloatingButton.Listener buttonListener = new FloatingButton.Listener() {
         @Override
         public void onClick() {
@@ -211,10 +251,7 @@ public final class Analyst extends Plugin {
         @Override
         public void onMoved(float fx, float fy) {
             host.prefs().edit().putFloat("btn_x", fx).putFloat("btn_y", fy).apply();
-            for (FloatingButton b : buttons.values()) {
-                b.view.setX(fx * Math.max(0, ((View) b.view.getParent()).getWidth() - b.view.getWidth()));
-                b.view.setY(fy * Math.max(0, ((View) b.view.getParent()).getHeight() - b.view.getHeight()));
-            }
+            for (FloatingButton b : buttons.values()) b.place(fx, fy);
         }
     };
 
@@ -226,20 +263,33 @@ public final class Analyst extends Plugin {
         View root = a.getWindow().getDecorView();
         ScreenReader.collect(root, ignore, items);
         Video found = ScreenReader.read(items, root.getWidth());
-        if (found != null && found.descKey != null) {
+        if (found != null) {
+            Video match = null;
             synchronized (this) {
                 for (Video cached : videos.values()) {
-                    if (found.descKey.equals(cached.descKey)) {
-                        found.mergeFrom(cached);
+                    if (found.descKey != null && found.descKey.equals(cached.descKey)) {
+                        match = cached;
                         break;
                     }
                 }
+                // без описания — по автору и числу лайков (на экране оно округлено)
+                if (match == null && found.nickname != null) {
+                    String nick = normalize(found.nickname);
+                    for (Video cached : videos.values()) {
+                        if (cached.nickname != null && nick.equals(normalize(cached.nickname))
+                                && close(found.digg, cached.digg)) {
+                            match = cached;
+                            break;
+                        }
+                    }
+                }
             }
+            if (match != null) found.mergeFrom(match);
         }
 
         StringBuilder d = new StringBuilder();
         d.append("тексты на экране: ").append(items.size())
-                .append(", твой ролик: ").append(found == null ? "нет" : found.toString());
+                .append(", ролик: ").append(found == null ? "нет" : (found.own ? "твой " : "чужой ") + found);
         // нижние тексты важнее: там «Просмотры: …», дата и описание
         List<ScreenReader.Item> bottomFirst = new ArrayList<>(items);
         Collections.sort(bottomFirst, new Comparator<ScreenReader.Item>() {
@@ -260,6 +310,12 @@ public final class Analyst extends Plugin {
             screenDiag.put(name, d.toString());
         }
         return found;
+    }
+
+    /** Совпадают с учётом округления на экране («6,4 тыс.»). */
+    private static boolean close(long screen, long exact) {
+        if (screen < 0 || exact < 0) return false;
+        return Math.abs(screen - exact) <= Math.max(3, Math.max(screen, exact) * 0.05);
     }
 
     static String normalize(String s) {
@@ -335,12 +391,13 @@ public final class Analyst extends Plugin {
     private void analyse(Video v) {
         if (v == null) {
             host.call("showWindow", "📊 Аналитик",
-                    "Это не твой ролик — или плагин не нашёл на экране строку «Просмотры: …».\n\n"
-                            + "Открой свой ролик из профиля. Если не помогает — «Диагностика» в настройках плагина.");
+                    "Не узнал ролик на экране: не вижу ни «Просмотры: …», ни «… назад» с колонкой чисел справа.\n\n"
+                            + "Открой ролик целиком. Если не помогает — «Диагностика» в настройках плагина.");
             return;
         }
         saveSamples();
-        host.call("showWindow", "📊 " + (v.handle() == null ? "Твой ролик" : "@" + v.handle()), report(v));
+        String who = v.own ? "Твой ролик" : v.handle() != null ? "@" + v.handle() : "Ролик";
+        host.call("showWindow", "📊 " + who, report(v));
     }
 
     private String report(Video v) {
@@ -352,9 +409,13 @@ public final class Analyst extends Plugin {
         }
         s.append('\n');
 
-        if (v.play <= 0) {
-            return s.append("TikTok не отдал число просмотров для этого ролика.").toString();
-        }
+        SharedPreferences prefs = host.prefs();
+        boolean showForecast = prefs.getBoolean(SettingsDialog.REP_FORECAST, true);
+        boolean showCompare = prefs.getBoolean(SettingsDialog.REP_COMPARE, true);
+        boolean showGood = prefs.getBoolean(SettingsDialog.REP_GOOD, true);
+        boolean showFix = prefs.getBoolean(SettingsDialog.REP_FIX, true);
+
+        if (v.play <= 0) return s.append(reactionReport(v, age, showGood)).toString().trim();
 
         double like = pct(v.digg, v.play), comment = pct(v.comment, v.play);
         double share = pct(v.share, v.play), save = pct(v.collect, v.play);
@@ -364,7 +425,7 @@ public final class Analyst extends Plugin {
         if (speed > 0) s.append(" · ⚡ ").append(big((long) speed)).append("/час");
         s.append('\n');
         s.append("❤️ ").append(p(like)).append("  💬 ").append(p(comment))
-                .append("  🔁 ").append(p(share)).append("  🔖 ").append(p(save)).append('\n');
+                .append("  🔁 ").append(p(share)).append("  🔖 ").append(v.collect < 0 ? "—" : p(save)).append('\n');
 
         int scoreRank, speedRank;
         synchronized (this) {
@@ -372,24 +433,56 @@ public final class Analyst extends Plugin {
             speedRank = speed > 0 ? rank(speedSamples, speed) : -1;
         }
         s.append("Вовлечённость: ").append(level(v.score(), 6, 12));
-        if (scoreRank >= 0) s.append(" — лучше ").append(scoreRank).append("% роликов из ленты");
+        if (showCompare && scoreRank >= 0) s.append(" — лучше ").append(scoreRank).append("% роликов из ленты");
         s.append('\n');
-        if (speedRank >= 0) s.append("Скорость: быстрее ").append(speedRank).append("% роликов из ленты\n");
+        if (showCompare && speedRank >= 0) s.append("Скорость: быстрее ").append(speedRank).append("% роликов из ленты\n");
 
-        s.append("\n📈 Прогноз (грубо)\n").append(forecast(v, age)).append('\n');
+        if (showForecast) s.append("\n📈 Прогноз (грубо)\n").append(forecast(v, age)).append('\n');
 
         List<String> good = new ArrayList<>();
         List<String> fix = new ArrayList<>();
         advise(v, like, comment, share, save, speedRank, good, fix);
-        if (!good.isEmpty()) {
+        if (showGood && !good.isEmpty()) {
             s.append("\n✅ Что работает\n");
             for (String g : good) s.append("• ").append(g).append('\n');
         }
-        if (!fix.isEmpty()) {
-            s.append("\n🛠 Что исправить в следующем ролике\n");
+        if (showFix && !fix.isEmpty()) {
+            s.append(v.own ? "\n🛠 Что исправить в следующем ролике\n" : "\n🛠 Что здесь можно было сделать лучше\n");
             for (String f : fix) s.append("• ").append(f).append('\n');
         }
         return s.toString().trim();
+    }
+
+    /** Отчёт без просмотров (чужой ролик, которого нет в ленте): реакция относительно лайков. */
+    private static String reactionReport(Video v, double age, boolean showGood) {
+        StringBuilder s = new StringBuilder();
+        s.append("👁 Просмотры не видны: это не твой ролик, а в данных ленты его нет.\n\n");
+        s.append("❤️ ").append(v.digg < 0 ? "—" : big(v.digg))
+                .append("  💬 ").append(v.comment < 0 ? "—" : big(v.comment))
+                .append("  🔖 ").append(v.collect < 0 ? "—" : big(v.collect))
+                .append("  🔁 ").append(v.share < 0 ? "—" : big(v.share)).append('\n');
+        if (v.digg > 0 && age > 0) s.append("⚡ ").append(big((long) (v.digg / age))).append(" лайков/час\n");
+        if (v.digg > 0) {
+            s.append("На 100 лайков: 💬 ").append(per100(v.comment, v.digg))
+                    .append("  🔖 ").append(per100(v.collect, v.digg))
+                    .append("  🔁 ").append(per100(v.share, v.digg)).append('\n');
+            if (showGood) {
+                List<String> notes = new ArrayList<>();
+                if (v.comment >= 0 && v.comment * 100.0 / v.digg >= 10) notes.add("Активно обсуждают — посмотри, чем ролик провоцирует комментарии.");
+                if (v.collect >= 0 && v.collect * 100.0 / v.digg >= 10) notes.add("Много сохранений — в ролике есть польза, которую хочется пересмотреть.");
+                if (v.share >= 0 && v.share * 100.0 / v.digg >= 3) notes.add("Им активно делятся — тема «отправь другу».");
+                if (!notes.isEmpty()) {
+                    s.append("\n✅ Чему поучиться\n");
+                    for (String n : notes) s.append("• ").append(n).append('\n');
+                }
+            }
+        }
+        return s.toString();
+    }
+
+    private static String per100(long part, long likes) {
+        if (part < 0 || likes <= 0) return "—";
+        return String.format(new Locale("ru"), "%.1f", part * 100.0 / likes);
     }
 
     private String forecast(Video v, double age) {
@@ -442,23 +535,23 @@ public final class Analyst extends Plugin {
 
     private static void advise(Video v, double like, double comment, double share, double save,
                                int speedRank, List<String> good, List<String> fix) {
-        if (like >= 8) good.add("Лайков много — ролик цепляет.");
-        if (comment >= 0.5) good.add("Активно комментируют — тема вызывает реакцию.");
-        if (share >= 0.5) good.add("Им делятся — это сильнейший сигнал для алгоритма.");
-        if (save >= 0.5) good.add("Сохраняют — в ролике есть польза.");
+        if (v.digg >= 0 && like >= 8) good.add("Лайков много — ролик цепляет.");
+        if (v.comment >= 0 && comment >= 0.5) good.add("Активно комментируют — тема вызывает реакцию.");
+        if (v.share >= 0 && share >= 0.5) good.add("Им делятся — это сильнейший сигнал для алгоритма.");
+        if (v.collect >= 0 && save >= 0.5) good.add("Сохраняют — в ролике есть польза.");
 
-        if (like < 3) {
+        if (v.digg >= 0 && like < 3) {
             fix.add("Цепляет слабо: усиль первые 1–2 секунды — сразу результат или интрига, "
                     + "текст-крючок на экране, без медленного вступления.");
         }
-        if (comment < 0.1) {
+        if (v.comment >= 0 && comment < 0.1) {
             fix.add("Мало комментариев: задай вопрос в конце или в подписи, оставь спорную деталь, "
                     + "закрепи свой комментарий-вопрос.");
         }
-        if (share < 0.1) {
+        if (v.share >= 0 && share < 0.1) {
             fix.add("Мало репостов: дай повод переслать — «отправь тому, кто…», жизненная ситуация, польза.");
         }
-        if (save < 0.1) {
+        if (v.collect >= 0 && save < 0.1) {
             fix.add("Мало сохранений: добавь то, что хочется пересмотреть — список, рецепт, инструкцию, лайфхак.");
         }
         if (like >= 6 && speedRank >= 0 && speedRank < 30 && v.ageHours() < 24) {
@@ -577,6 +670,8 @@ public final class Analyst extends Plugin {
         long createTime, play, digg, comment, share, collect;
         /** Прочитан с экрана: числа округлены («62,2 тыс.»), возраст — до часа/дня. */
         boolean fromScreen, ageApprox;
+        /** Свой ролик: на экране есть «Просмотры: …». */
+        boolean own;
 
         static Video read(Object post) {
             if (post == null) return null;
@@ -616,7 +711,7 @@ public final class Analyst extends Plugin {
         void mergeFrom(Video feed) {
             aid = feed.aid;
             uid = feed.uid;
-            nickname = feed.nickname;
+            if (feed.nickname != null) nickname = feed.nickname;
             uniqueId = feed.uniqueId;
             if (feed.desc != null) desc = feed.desc;
             if (feed.createTime > 0) {

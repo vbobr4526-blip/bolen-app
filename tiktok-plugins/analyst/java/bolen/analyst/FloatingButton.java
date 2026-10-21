@@ -31,11 +31,14 @@ final class FloatingButton {
 
     final TextView view;
     private final ViewGroup root;
-    private final int size;
+    private final float density;
+    private int size;
+    private float alpha = 1f;
 
     FloatingButton(Activity activity, final float fx, final float fy, final Listener listener) {
         root = (ViewGroup) activity.getWindow().getDecorView();
-        size = dp(activity, 50);
+        density = activity.getResources().getDisplayMetrics().density;
+        size = Math.round(50 * density);
 
         view = new TextView(activity);
         view.setText("📊");
@@ -79,7 +82,7 @@ final class FloatingButton {
                         startY = view.getY();
                         dragging = false;
                         longFired = false;
-                        view.setAlpha(0.7f);
+                        view.setAlpha(Math.max(0.2f, alpha * 0.7f));
                         main.postDelayed(longPress, LONG_PRESS_MS);
                         return true;
                     case MotionEvent.ACTION_MOVE:
@@ -96,7 +99,7 @@ final class FloatingButton {
                     case MotionEvent.ACTION_UP:
                     case MotionEvent.ACTION_CANCEL:
                         main.removeCallbacks(longPress);
-                        view.setAlpha(1f);
+                        view.setAlpha(alpha);
                         if (dragging) {
                             listener.onMoved(fraction(view.getX(), root.getWidth() - size),
                                     fraction(view.getY(), root.getHeight() - size));
@@ -119,11 +122,32 @@ final class FloatingButton {
         }
     }
 
+    /** Размер в dp и прозрачность (1 — непрозрачная). */
+    void style(int sizeDp, float alpha) {
+        this.alpha = alpha;
+        size = Math.round(sizeDp * density);
+        ViewGroup.LayoutParams lp = view.getLayoutParams();
+        lp.width = size;
+        lp.height = size;
+        view.setLayoutParams(lp);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeDp * 0.44f);
+        view.setAlpha(alpha);
+    }
+
     void detach() {
         root.removeView(view);
     }
 
-    private void place(float fx, float fy) {
+    void place(final float fx, final float fy) {
+        if (root.getWidth() == 0) {
+            root.post(new Runnable() {
+                @Override
+                public void run() {
+                    place(fx, fy);
+                }
+            });
+            return;
+        }
         view.setX(fx * Math.max(0, root.getWidth() - size));
         view.setY(fy * Math.max(0, root.getHeight() - size));
     }

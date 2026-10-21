@@ -2,10 +2,10 @@
   "id": "bolen.analyst",
   "name": "📊 Analyst",
   "name_ru": "📊 Аналитик",
-  "version": "1.0",
+  "version": "1.1",
   "author": "bolen-app",
-  "description": "A 📊 button over videos: views per hour, engagement, a rough forecast and tips for the next video.",
-  "description_ru": "Кнопка 📊 поверх видео: просмотры в час, вовлечённость, грубый прогноз и советы для следующего ролика.",
+  "description": "A draggable 📊 button on your own videos: views per hour, engagement, a rough forecast and tips for the next video.",
+  "description_ru": "Перетаскиваемая кнопка 📊 на твоих роликах: просмотры в час, вовлечённость, грубый прогноз и советы для следующего ролика.",
   "entry": "bolen.analyst.Analyst",
   "min_api": 3
 }

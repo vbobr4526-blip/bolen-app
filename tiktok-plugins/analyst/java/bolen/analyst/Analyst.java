@@ -1,11 +1,21 @@
 package bolen.analyst;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.SharedPreferences;
+import android.graphics.Rect;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.EditText;
+import android.widget.TextView;
 
 import com.ss.android.ugc.aweme.ttp.plugin.Plugin;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -14,25 +24,29 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.WeakHashMap;
 
 /**
- * «📊 Аналитик»: плавающая кнопка поверх видео. По нажатию — окно со скоростью
- * набора просмотров, вовлечённостью, грубым прогнозом и советами для следующего ролика.
+ * «📊 Аналитик»: перетаскиваемая кнопка 📊, которая появляется только на твоих роликах.
+ * По нажатию — окно со скоростью набора просмотров, вовлечённостью, грубым прогнозом
+ * и советами для следующего ролика.
  *
- * Какое видео сейчас на экране, мод напрямую не сообщает. Плагин запоминает ролики
- * из onFeed и угадывает текущий по onName (имя автора) и onText (описание),
- * которые TikTok рисует для видео на экране.
+ * Какое видео на экране, мод напрямую не сообщает. Плагин запоминает ролики из onFeed
+ * и раз в TICK_MS ищет среди реально видимых на экране TextView описание одного из них:
+ * соседние ролики, которые TikTok держит заранее, за пределами экрана и не совпадут.
  */
 public final class Analyst extends Plugin {
 
     /** Характерное время затухания просмотров, часов (модель V·(1−e^(−t/τ))). */
     private static final double TAU_H = 36;
     private static final long SNAPSHOT_MIN_MS = 20 * 60_000;
+    private static final long TICK_MS = 800;
     private static final int MAX_VIDEOS = 300;
     private static final int MAX_SAMPLES = 300;
+    private static final int DESC_KEY = 30;
 
     private final Host host = new Host(this);
+    private final Handler main = new Handler(Looper.getMainLooper());
 
     private final Map<String, Video> videos = new LinkedHashMap<String, Video>(64, 0.75f, true) {
         @Override
@@ -40,27 +54,33 @@ public final class Analyst extends Plugin {
             return size() > MAX_VIDEOS;
         }
     };
-    private final Map<String, String> aidByUid = new ConcurrentHashMap<>();
-    private final Map<String, String> aidByDesc = new ConcurrentHashMap<>();
-    private volatile String currentAid;
-    private volatile String lastParsedAid;
 
     /** Вовлечённость и скорость роликов из ленты — для сравнения. */
     private final List<Double> scoreSamples = new ArrayList<>();
     private final List<Double> speedSamples = new ArrayList<>();
 
+    private final Map<Activity, FloatingButton> buttons = new WeakHashMap<>();
+    private WeakReference<Activity> resumed = new WeakReference<>(null);
+    /** Ролик, который сейчас виден на экране (только главный поток). */
+    private Video visible;
+
     private int feedLogs;
+    private boolean loggedOwnSeen;
     private final Set<String> loggedScreens = new HashSet<>();
 
-    private final Runnable showAnalysis = new Runnable() {
+    private final Runnable tick = new Runnable() {
         @Override
         public void run() {
+            Activity a = resumed.get();
+            if (a == null) return;
             try {
-                analyse();
+                FloatingButton b = buttons.get(a);
+                visible = findVisible(a, b == null ? null : b.view);
+                if (b != null) b.show(visible != null);
             } catch (Throwable t) {
-                host.log("analyse: " + t);
-                host.call("showWindow", "📊 Аналитик", "Не получилось разобрать ролик. Подробности в журнале мода.");
+                host.log("tick: " + t);
             }
+            main.postDelayed(this, TICK_MS);
         }
     };
 
@@ -70,41 +90,76 @@ public final class Analyst extends Plugin {
     public void onStart(Context context) {
         loadSamples();
         prune();
-        host.call("addSettingsRow", "Как пользоваться", "Кнопка 📊 поверх видео", new Runnable() {
+        host.call("addSettingsRow", "Мой аккаунт", accountDetail(), new Runnable() {
+            @Override
+            public void run() {
+                askAccount();
+            }
+        });
+        host.call("addSettingsRow", "Как пользоваться", "Кнопка 📊 на твоих роликах", new Runnable() {
             @Override
             public void run() {
                 host.call("showWindow", "📊 Аналитик",
-                        "Открой ролик и нажми плавающую кнопку 📊.\n\n"
-                                + "Плагин покажет просмотры в час, вовлечённость, грубый прогноз и что "
-                                + "улучшить в следующем ролике.\n\n"
-                                + "Прогноз точнее, если открыть тот же ролик ещё раз через 20+ минут: "
-                                + "плагин сравнит, как быстро растут просмотры.\n\n"
-                                + "Сравнение идёт с роликами из твоей ленты — а там в основном популярные, "
-                                + "так что планка высокая.");
+                        "1. Укажи свой аккаунт: строка «Мой аккаунт» выше — или открой свой ролик "
+                                + "и подержи палец на кнопке 📊.\n\n"
+                                + "2. Открой свой ролик и нажми 📊 — статистика именно этого ролика.\n\n"
+                                + "Кнопку можно перетащить пальцем в любое место, она запомнит его.\n\n"
+                                + "Кнопка узнаёт ролик по описанию на экране, поэтому у ролика должно "
+                                + "быть описание (хотя бы хэштеги).\n\n"
+                                + "Прогноз точнее, если открыть тот же ролик ещё раз через 20+ минут.");
             }
         });
         host.call("addSettingsRow", "Сбросить статистику", "Забыть замеры и сравнение с лентой", new Runnable() {
             @Override
             public void run() {
-                host.prefs().edit().clear().apply();
+                SharedPreferences prefs = host.prefs();
+                String uid = prefs.getString("owner_uid", null), handle = prefs.getString("owner_handle", null);
+                float x = prefs.getFloat("btn_x", 0.04f), y = prefs.getFloat("btn_y", 0.3f);
+                prefs.edit().clear().putString("owner_uid", uid).putString("owner_handle", handle)
+                        .putFloat("btn_x", x).putFloat("btn_y", y).apply();
                 synchronized (Analyst.this) {
                     scoreSamples.clear();
                     speedSamples.clear();
                 }
-                host.call("showWindow", "📊 Аналитик", "Статистика сброшена.");
+                host.call("showWindow", "📊 Аналитик", "Статистика сброшена. Аккаунт и место кнопки сохранены.");
             }
         });
-        host.log("started");
+        host.log("started, account " + accountDetail());
     }
 
     @Override
     public void onScreen(Activity activity, String name) {
+        if (loggedScreens.size() < 20 && loggedScreens.add(name)) host.log("screen: " + name);
+    }
+
+    @Override
+    public void onActivityResumed(Activity activity) {
         try {
-            if (loggedScreens.size() < 20 && loggedScreens.add(name)) host.log("screen: " + name);
-            host.call("offer", "📊", showAnalysis);
+            resumed = new WeakReference<>(activity);
+            if (!buttons.containsKey(activity)) {
+                SharedPreferences prefs = host.prefs();
+                buttons.put(activity, new FloatingButton(activity,
+                        prefs.getFloat("btn_x", 0.04f), prefs.getFloat("btn_y", 0.3f), buttonListener));
+            }
+            main.removeCallbacks(tick);
+            main.post(tick);
         } catch (Throwable t) {
-            host.log("onScreen: " + t);
+            host.log("resume: " + t);
         }
+    }
+
+    @Override
+    public void onActivityPaused(Activity activity) {
+        main.removeCallbacks(tick);
+        FloatingButton b = buttons.get(activity);
+        if (b != null) b.show(false);
+    }
+
+    @Override
+    public void onStop() {
+        main.removeCallbacks(tick);
+        for (FloatingButton b : buttons.values()) b.detach();
+        buttons.clear();
     }
 
     @Override
@@ -124,22 +179,127 @@ public final class Analyst extends Plugin {
         return posts;
     }
 
-    @Override
-    public String onName(String uid, String name) {
-        if (uid != null) {
-            String aid = aidByUid.get(uid);
-            if (aid != null) currentAid = aid;
+    private final FloatingButton.Listener buttonListener = new FloatingButton.Listener() {
+        @Override
+        public void onClick() {
+            try {
+                analyse(visible);
+            } catch (Throwable t) {
+                host.log("analyse: " + t);
+                host.call("showWindow", "📊 Аналитик", "Не получилось разобрать ролик. Подробности в журнале мода.");
+            }
         }
-        return name;
+
+        @Override
+        public void onLongClick() {
+            Video v = visible;
+            if (v == null || (v.uid == null && v.uniqueId == null)) return;
+            host.prefs().edit().putString("owner_uid", v.uid).putString("owner_handle", v.uniqueId).apply();
+            host.log("owner set by long press: " + v.uniqueId + " / " + v.uid);
+            host.call("showWindow", "📊 Аналитик",
+                    "Запомнил твой аккаунт: @" + v.handle() + "\n\nТеперь кнопка 📊 появляется только на твоих роликах.");
+        }
+
+        @Override
+        public void onMoved(float fx, float fy) {
+            host.prefs().edit().putFloat("btn_x", fx).putFloat("btn_y", fy).apply();
+            for (FloatingButton b : buttons.values()) {
+                b.view.setX(fx * Math.max(0, ((View) b.view.getParent()).getWidth() - b.view.getWidth()));
+                b.view.setY(fy * Math.max(0, ((View) b.view.getParent()).getHeight() - b.view.getHeight()));
+            }
+        }
+    };
+
+    // --- мой аккаунт ---
+
+    private String accountDetail() {
+        SharedPreferences prefs = host.prefs();
+        String handle = prefs.getString("owner_handle", null);
+        if (handle != null && !handle.isEmpty()) return "@" + handle + ". Нажми, чтобы изменить";
+        if (prefs.getString("owner_uid", null) != null) return "Задан. Нажми, чтобы изменить";
+        return "Не задан — кнопка видна на всех роликах. Нажми, чтобы указать";
     }
 
-    @Override
-    public CharSequence onText(CharSequence text) {
-        if (text != null && text.length() >= 8 && !aidByDesc.isEmpty()) {
-            String aid = aidByDesc.get(text.toString());
-            if (aid != null) currentAid = aid;
+    private void askAccount() {
+        Activity a = resumed.get();
+        if (a == null) return;
+        final EditText input = new EditText(a);
+        input.setSingleLine(true);
+        input.setHint("@username");
+        String handle = host.prefs().getString("owner_handle", null);
+        if (handle != null) input.setText("@" + handle);
+        new AlertDialog.Builder(a)
+                .setTitle("Мой аккаунт TikTok")
+                .setMessage("Имя пользователя, как в профиле после @. Пусто — кнопка на всех роликах.")
+                .setView(input)
+                .setPositiveButton("Сохранить", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        String h = input.getText().toString().trim().replace("@", "").toLowerCase(Locale.US);
+                        SharedPreferences.Editor e = host.prefs().edit().remove("owner_uid");
+                        if (h.isEmpty()) e.remove("owner_handle");
+                        else e.putString("owner_handle", h);
+                        e.apply();
+                        host.log("owner set in settings: " + h);
+                    }
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private boolean isOwn(Video v, String ownerUid, String ownerHandle) {
+        if (ownerUid != null && ownerUid.equals(v.uid)) return true;
+        if (ownerHandle != null && v.uniqueId != null && ownerHandle.equalsIgnoreCase(v.uniqueId)) {
+            if (ownerUid == null && v.uid != null) host.prefs().edit().putString("owner_uid", v.uid).apply();
+            return true;
         }
-        return text;
+        return false;
+    }
+
+    // --- какой ролик на экране ---
+
+    private Video findVisible(Activity a, View ignore) {
+        List<Video> candidates = new ArrayList<>();
+        SharedPreferences prefs = host.prefs();
+        String ownerUid = prefs.getString("owner_uid", null), ownerHandle = prefs.getString("owner_handle", null);
+        boolean anyOwner = ownerUid != null || ownerHandle != null;
+        synchronized (this) {
+            for (Video v : videos.values()) {
+                if (v.descKey == null) continue;
+                if (!anyOwner || isOwn(v, ownerUid, ownerHandle)) candidates.add(v);
+            }
+        }
+        if (candidates.isEmpty()) return null;
+
+        List<String> texts = new ArrayList<>();
+        collectTexts(a.getWindow().getDecorView(), ignore, texts, new Rect());
+        for (String t : texts) {
+            String norm = normalize(t);
+            // описание может быть обрезано на экране («…», «ещё»)
+            String cut = norm.replaceAll("(\\.\\.\\.|…).*$", "").trim();
+            for (Video v : candidates) {
+                if (norm.contains(v.descKey)) return v;
+                if (cut.length() >= 12 && cut.length() < v.descKey.length() && v.descKey.startsWith(cut)) return v;
+            }
+        }
+        return null;
+    }
+
+    private static void collectTexts(View v, View ignore, List<String> out, Rect rect) {
+        if (v == ignore || v.getVisibility() != View.VISIBLE || out.size() > 300) return;
+        if (v instanceof TextView) {
+            CharSequence t = ((TextView) v).getText();
+            if (t != null && t.length() >= 5 && v.getGlobalVisibleRect(rect) && rect.width() > 0 && rect.height() > 0) {
+                out.add(t.toString());
+            }
+        } else if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) collectTexts(g.getChildAt(i), ignore, out, rect);
+        }
+    }
+
+    static String normalize(String s) {
+        return s.replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
     }
 
     // --- лента ---
@@ -147,10 +307,12 @@ public final class Analyst extends Plugin {
     private void parseFeed(List<Object> posts) {
         try {
             int parsed = 0;
+            Video sample = null;
             for (Object post : posts) {
                 Video v = Video.read(post);
                 if (v == null) continue;
                 parsed++;
+                sample = v;
                 synchronized (this) {
                     videos.put(v.aid, v);
                     if (v.play >= 1000) {
@@ -158,19 +320,17 @@ public final class Analyst extends Plugin {
                         if (v.ageHours() > 0) add(speedSamples, v.play / v.ageHours());
                     }
                 }
-                if (v.uid != null) aidByUid.put(v.uid, v.aid);
-                if (v.desc != null && v.desc.length() >= 8) aidByDesc.put(v.desc, v.aid);
-                lastParsedAid = v.aid;
+                if (!loggedOwnSeen) {
+                    SharedPreferences prefs = host.prefs();
+                    if (isOwn(v, prefs.getString("owner_uid", null), prefs.getString("owner_handle", null))) {
+                        loggedOwnSeen = true;
+                        host.log("own video seen: " + v);
+                    }
+                }
             }
-            if (aidByDesc.size() > MAX_VIDEOS) aidByDesc.clear();
-            if (aidByUid.size() > MAX_VIDEOS) aidByUid.clear();
             if (feedLogs < 3) {
                 feedLogs++;
                 Object first = posts.get(0);
-                Video sample;
-                synchronized (this) {
-                    sample = lastParsedAid == null ? null : videos.get(lastParsedAid);
-                }
                 host.log("feed: " + posts.size() + " posts (" + (first == null ? "null" : first.getClass().getName())
                         + "), parsed " + parsed + (sample == null ? "" : ", e.g. " + sample));
                 saveSamples();
@@ -187,19 +347,24 @@ public final class Analyst extends Plugin {
 
     // --- разбор ---
 
-    private void analyse() {
-        String aid = currentAid != null ? currentAid : lastParsedAid;
-        Video v;
-        synchronized (this) {
-            v = aid == null ? null : videos.get(aid);
-        }
+    private void analyse(Video v) {
         if (v == null) {
-            host.call("showWindow", "📊 Аналитик",
-                    "Пока не вижу данных о ролике. Пролистай ленту или открой ролик ещё раз и нажми 📊.");
+            host.call("showWindow", "📊 Аналитик", "Не вижу, какой ролик на экране. Открой свой ролик и нажми 📊.");
             return;
         }
+        synchronized (this) {
+            Video fresh = videos.get(v.aid);
+            if (fresh != null) v = fresh;
+        }
         saveSamples();
-        host.call("showWindow", "📊 " + (v.handle() == null ? "Ролик" : "@" + v.handle()), report(v));
+        String title = "📊 " + (v.handle() == null ? "Ролик" : "@" + v.handle());
+        SharedPreferences prefs = host.prefs();
+        if (prefs.getString("owner_uid", null) == null && prefs.getString("owner_handle", null) == null) {
+            host.call("showWindow", title, report(v)
+                    + "\n\n💡 Это твой ролик? Подержи палец на 📊 — кнопка будет появляться только на твоих.");
+        } else {
+            host.call("showWindow", title, report(v));
+        }
     }
 
     private String report(Video v) {
@@ -432,7 +597,7 @@ public final class Analyst extends Plugin {
     // --- модель ролика ---
 
     static final class Video {
-        String aid, uid, nickname, uniqueId, desc;
+        String aid, uid, nickname, uniqueId, desc, descKey;
         long createTime, play, digg, comment, share, collect;
 
         static Video read(Object aweme) {
@@ -441,6 +606,10 @@ public final class Analyst extends Plugin {
             v.aid = Model.str(aweme, "aid", "awemeId", "aweme_id");
             if (v.aid == null || v.aid.isEmpty()) return null;
             v.desc = Model.str(aweme, "desc", "description");
+            if (v.desc != null) {
+                String norm = normalize(v.desc);
+                if (norm.length() >= 5) v.descKey = norm.substring(0, Math.min(DESC_KEY, norm.length()));
+            }
             v.createTime = Model.num(aweme, "createTime", "create_time");
 
             Object author = Model.get(aweme, "author");
